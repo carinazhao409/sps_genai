@@ -1,35 +1,68 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12-slim-bookworm
+# --------------------------------------------------
+# 1. Python base image
+# --------------------------------------------------
 
-# The installer requires curl (and certificates) to download the release archive
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+FROM python:3.13-slim-bookworm
 
-# Download the latest installer
+# --------------------------------------------------
+# 2. Install system dependencies
+# --------------------------------------------------
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# --------------------------------------------------
+# 3. Install uv
+# --------------------------------------------------
+
 ADD https://astral.sh/uv/install.sh /uv-installer.sh
 
-# Run the installer then remove it
 RUN sh /uv-installer.sh && rm /uv-installer.sh
 
-# Ensure the installed binary is on the PATH
-ENV PATH="/root/.local/bin/:$PATH"
+ENV PATH="/root/.local/bin:$PATH"
 
-# Set the working directory
+# --------------------------------------------------
+# 4. Set working directory
+# --------------------------------------------------
+
 WORKDIR /code
 
-# Copy the project configuration files
+# --------------------------------------------------
+# 5. Copy dependency configuration
+# --------------------------------------------------
+
 COPY pyproject.toml uv.lock README.md /code/
 
-# Copy the src package required by the project
 COPY ./src /code/src
 
-# Install dependencies using uv
-RUN uv sync --frozen
+# --------------------------------------------------
+# 6. Install project dependencies
+# --------------------------------------------------
 
-# Download the spaCy English model
-RUN uv run python -m spacy download en_core_web_lg
+RUN uv sync --frozen --no-dev --python 3.13
 
-# Copy the application code
+# --------------------------------------------------
+# 7. Download spaCy English language model
+# --------------------------------------------------
+
+RUN uv run --no-sync python -m spacy download en_core_web_lg
+
+# --------------------------------------------------
+# 8. Copy application code and trained CNN
+# --------------------------------------------------
+
 COPY ./app /code/app
 
-# Command to run the application
-CMD ["uv", "run", "fastapi", "run", "app/main.py", "--port", "80"]
+# --------------------------------------------------
+# 9. Expose FastAPI port
+# --------------------------------------------------
+
+EXPOSE 80
+
+# --------------------------------------------------
+# 10. Start FastAPI
+# --------------------------------------------------
+
+CMD ["uv", "run", "--no-sync", "fastapi", "run", "app/main.py", "--port", "80"]

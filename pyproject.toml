@@ -6,11 +6,16 @@ readme = "README.md"
 authors = [
     { name = "Ruoxuan Zhao", email = "rz2772@columbia.edu" }
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
+
 dependencies = [
     "fastapi[standard]>=0.141.1",
     "spacy>=3.8.16",
     "uvicorn>=0.53.0",
+    "torch",
+    "torchvision",
+    "pillow",
+    "python-multipart",
 ]
 
 [project.scripts]

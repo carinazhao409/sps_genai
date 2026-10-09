@@ -1,22 +1,35 @@
-from typing import Union
-from fastapi import FastAPI
+"""Combined FastAPI application for the earlier modules and Assignment 2."""
+
+import io
+from pathlib import Path
+
+import torch
+import torchvision.transforms as transforms
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
+
 from app.bigram_model import BigramModel
+from app.cnn_model import CNN
 from app.embedding_model import EmbeddingModel
 
-app = FastAPI()
 
-# Sample corpus for the bigram model
+app = FastAPI(
+    title="Generative AI and CNN Image Classifier API",
+    description="Bigram text generation, word embeddings, and CIFAR-10 classification",
+    version="2.0",
+)
+
+# Original bigram model and sample corpus
 corpus = [
     "The Count of Monte Cristo is a novel written by Alexandre Dumas. "
     "It tells the story of Edmond Dantès, who is falsely imprisoned and later seeks revenge.",
     "this is another example sentence",
     "we are generating text based on bigram probabilities",
-    "bigram models are simple but effective"
+    "bigram models are simple but effective",
 ]
 
 bigram_model = BigramModel(corpus)
-
 embedding_model = EmbeddingModel()
 
 
@@ -24,8 +37,10 @@ class TextGenerationRequest(BaseModel):
     start_word: str
     length: int
 
+
 class EmbeddingRequest(BaseModel):
     word: str
+
 
 @app.get("/")
 def read_root():
@@ -34,17 +49,57 @@ def read_root():
 
 @app.post("/generate")
 def generate_text(request: TextGenerationRequest):
-    generated_text = bigram_model.generate_text(
-        request.start_word,
-        request.length
-    )
+    generated_text = bigram_model.generate_text(request.start_word, request.length)
     return {"generated_text": generated_text}
+
 
 @app.post("/embedding")
 def get_embedding(request: EmbeddingRequest):
     embedding = embedding_model.calculate_embedding(request.word)
+    return {"word": request.word, "embedding": embedding}
+
+
+# Assignment 2: CNN image classifier
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "cifar10_cnn.pth"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+CLASSES = (
+    "airplane", "automobile", "bird", "cat", "deer",
+    "dog", "frog", "horse", "ship", "truck",
+)
+
+cnn_model = CNN().to(DEVICE)
+cnn_model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
+cnn_model.eval()
+
+image_transform = transforms.Compose([
+    transforms.Resize((64, 64)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+])
+
+
+@app.post("/predict")
+async def predict(file: UploadFile = File(...)):
+    """Classify an uploaded image into one of the ten CIFAR-10 classes."""
+    try:
+        image_data = await file.read()
+        with Image.open(io.BytesIO(image_data)) as uploaded_image:
+            image = uploaded_image.convert("RGB")
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Please upload a valid image.") from exc
+    finally:
+        await file.close()
+
+    image_tensor = image_transform(image).unsqueeze(0).to(DEVICE)
+    with torch.inference_mode():
+        outputs = cnn_model(image_tensor)
+        probabilities = torch.softmax(outputs, dim=1)
+        confidence, predicted = torch.max(probabilities, dim=1)
 
     return {
-        "word": request.word,
-        "embedding": embedding
+        "filename": file.filename,
+        "predicted_class": CLASSES[predicted.item()],
+        "confidence": round(confidence.item(), 4),
     }
