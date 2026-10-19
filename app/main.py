@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.bigram_model import BigramModel
 from app.cnn_model import CNN
 from app.embedding_model import EmbeddingModel
+from app.gan_model import Generator
 
 
 app = FastAPI(
@@ -103,3 +104,40 @@ async def predict(file: UploadFile = File(...)):
         "predicted_class": CLASSES[predicted.item()],
         "confidence": round(confidence.item(), 4),
     }
+
+
+# Assignment 3: generate handwritten digit images with the MNIST GAN.
+# Train first: uv run python train_gan.py --epochs 10
+from fastapi.responses import Response
+
+GAN_PATH = BASE_DIR / 'mnist_gan_generator.pth'
+_gan_generator = None
+
+
+def load_gan_generator():
+    global _gan_generator
+    if _gan_generator is None:
+        if not GAN_PATH.exists():
+            raise HTTPException(
+                status_code=503,
+                detail='GAN weights not found. Run: uv run python train_gan.py --epochs 10',
+            )
+        model = Generator(z_dim=100).to(DEVICE)
+        model.load_state_dict(torch.load(GAN_PATH, map_location=DEVICE, weights_only=True))
+        model.eval()
+        _gan_generator = model
+    return _gan_generator
+
+
+@app.get('/generate-digit', response_class=Response)
+def generate_digit():
+    """Return one GAN-generated 28x28 grayscale PNG image."""
+    generator = load_gan_generator()
+    with torch.inference_mode():
+        noise = torch.randn(1, 100, device=DEVICE)
+        image_tensor = generator(noise).squeeze().cpu()
+        image_uint8 = ((image_tensor + 1) / 2 * 255).clamp(0, 255).byte().numpy()
+    image = Image.fromarray(image_uint8, mode='L')
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    return Response(content=buffer.getvalue(), media_type='image/png')
