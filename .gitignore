@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+.env
+.vscode/
+.vs/
+gan_samples/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Downloaded datasets
+data/MNIST/
+
+# Model checkpoints
+*.pt
+*.pth
