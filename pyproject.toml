@@ -16,6 +16,7 @@ dependencies = [
     "torchvision",
     "pillow",
     "python-multipart",
+    "matplotlib>=3.11.2",
 ]
 
 [project.scripts]
