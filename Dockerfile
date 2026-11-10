@@ -33,7 +33,7 @@ WORKDIR /code
 # 5. Copy dependency configuration
 # --------------------------------------------------
 
-COPY pyproject.toml uv.lock README.md /code/
+COPY pyproject.toml README.md /code/
 
 COPY ./src /code/src
 
@@ -41,7 +41,7 @@ COPY ./src /code/src
 # 6. Install project dependencies
 # --------------------------------------------------
 
-RUN uv sync --frozen --no-dev --python 3.13
+RUN uv sync --no-dev --python 3.13
 
 # --------------------------------------------------
 # 7. Download spaCy English language model

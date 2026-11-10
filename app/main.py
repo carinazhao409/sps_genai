@@ -32,7 +32,7 @@ corpus = [
 ]
 
 bigram_model = BigramModel(corpus)
-embedding_model = EmbeddingModel()
+embedding_model = None
 
 
 class TextGenerationRequest(BaseModel):
@@ -57,6 +57,12 @@ def generate_text(request: TextGenerationRequest):
 
 @app.post("/embedding")
 def get_embedding(request: EmbeddingRequest):
+    global embedding_model
+    if embedding_model is None:
+        try:
+            embedding_model = EmbeddingModel()
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail='spaCy en_core_web_lg model is not installed.') from exc
     embedding = embedding_model.calculate_embedding(request.word)
     return {"word": request.word, "embedding": embedding}
 
@@ -72,8 +78,11 @@ CLASSES = (
 )
 
 cnn_model = CNN().to(DEVICE)
-cnn_model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
-cnn_model.eval()
+if MODEL_PATH.exists():
+    cnn_model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=True))
+    cnn_model.eval()
+else:
+    cnn_model = None
 
 image_transform = transforms.Compose([
     transforms.Resize((64, 64)),
@@ -94,6 +103,8 @@ async def predict(file: UploadFile = File(...)):
     finally:
         await file.close()
 
+    if cnn_model is None:
+        raise HTTPException(status_code=503, detail='CNN checkpoint missing; train the earlier CNN first.')
     image_tensor = image_transform(image).unsqueeze(0).to(DEVICE)
     with torch.inference_mode():
         outputs = cnn_model(image_tensor)
@@ -147,7 +158,7 @@ def generate_digit():
 # Module 7: character-level LSTM text generation.
 # Load the trained model once rather than for every request.
 LSTM_PATH = BASE_DIR / "lstm_checkpoint.pt"
-_lstm_model, _lstm_stoi, _lstm_itos = load_lstm_model(LSTM_PATH)
+_lstm_model = _lstm_stoi = _lstm_itos = None
 
 
 @app.post("/generate_with_rnn")
@@ -155,6 +166,11 @@ def generate_with_rnn(request: TextGenerationRequest):
     """Generate additional characters from the supplied seed using the trained LSTM."""
     if not request.start_word or not 1 <= request.length <= 1000:
         raise HTTPException(status_code=422, detail="Provide a nonempty seed and length between 1 and 1000")
+    global _lstm_model, _lstm_stoi, _lstm_itos
+    if _lstm_model is None:
+        if not LSTM_PATH.exists():
+            raise HTTPException(status_code=503, detail='LSTM checkpoint missing; train the earlier LSTM first.')
+        _lstm_model, _lstm_stoi, _lstm_itos = load_lstm_model(LSTM_PATH)
     try:
         result = generate_lstm_text(
             _lstm_model, _lstm_stoi, _lstm_itos, request.start_word, request.length
@@ -162,3 +178,62 @@ def generate_with_rnn(request: TextGenerationRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"generated_text": result}
+
+
+# Module 9: fine-tuned GPT-2 question answering.
+
+
+@app.post("/generate_with_llm")
+def generate_with_llm(request: TextGenerationRequest):
+    """Answer a question using locally fine-tuned GPT-2 weights."""
+    if not request.start_word.strip() or not 1 <= request.length <= 256:
+        raise HTTPException(status_code=422, detail="Provide a question and length between 1 and 256")
+    try:
+        from app.gpt2_qa import generate_answer
+        result = generate_answer(request.start_word, request.length)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"generated_text": result}
+
+
+# Assignment 4: CIFAR-10 image generators.
+from app.assignment4_models import DiffusionUNet, EnergyCNN, sample_diffusion, langevin_sample
+
+_image_generators = {}
+
+
+def load_image_generator(kind):
+    if kind not in _image_generators:
+        path = BASE_DIR / f'cifar10_{kind}.pth'
+        if not path.exists():
+            raise HTTPException(status_code=503, detail=f'{kind} checkpoint missing. Run: python train_assignment4.py --model {kind}')
+        checkpoint = torch.load(path, map_location=DEVICE, weights_only=True)
+        model = (DiffusionUNet() if kind == 'diffusion' else EnergyCNN()).to(DEVICE)
+        model.load_state_dict(checkpoint['state_dict'])
+        model.eval()
+        _image_generators[kind] = (model, checkpoint)
+    return _image_generators[kind]
+
+
+def png_response(tensor):
+    pixels = ((tensor[0].detach().cpu().permute(1, 2, 0) + 1) * 127.5).clamp(0, 255).byte().numpy()
+    image = Image.fromarray(pixels, mode='RGB')
+    output = io.BytesIO()
+    image.save(output, format='PNG')
+    return Response(content=output.getvalue(), media_type='image/png')
+
+
+@app.get('/generate-diffusion', response_class=Response)
+def generate_diffusion():
+    """Generate a CIFAR-10-sized RGB image from a trained diffusion model."""
+    model, checkpoint = load_image_generator('diffusion')
+    image = sample_diffusion(model, steps=checkpoint['diffusion_steps'], device=DEVICE)
+    return png_response(image)
+
+
+@app.get('/generate-energy', response_class=Response)
+def generate_energy():
+    """Generate a CIFAR-10-sized RGB image by minimizing learned energy."""
+    model, _ = load_image_generator('energy')
+    image = langevin_sample(model, device=DEVICE)
+    return png_response(image)

@@ -17,6 +17,8 @@ dependencies = [
     "pillow",
     "python-multipart",
     "matplotlib>=3.11.2",
+    "transformers>=4.46,<5",
+    "datasets>=3,<5",
 ]
 
 [project.scripts]
